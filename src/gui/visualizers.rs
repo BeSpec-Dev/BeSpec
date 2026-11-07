@@ -8,6 +8,8 @@ use crate::fft_processor::FFTProcessor;
 
 /// The physical thickness (in points) of the peak indicator blocks
 const PEAK_THICKNESS: f32 = 2.0;
+// Frequency grid label font size, shared with the inspector tooltip reserve
+const GRID_LABEL_FONT_SIZE: f32 = 10.0;
 
 
 pub fn draw_main_visualizer(
@@ -120,6 +122,23 @@ pub fn draw_main_visualizer(
         },
     }
         
+    // Space the grid labels take along v (label extent + 3 px inset + 4 px gap)
+    let grid_reserve = if profile.visual_mode == VisualMode::Oscilloscope
+        || config.freq_grid_visibility == crate::shared_state::FreqGridVisibility::Off
+    {
+        0.0
+    } else {
+        let label = painter.layout_no_wrap(
+            "10k".to_string(),
+            egui::FontId::proportional(GRID_LABEL_FONT_SIZE),
+            egui::Color32::WHITE);
+        let extent = match profile.orientation {
+            crate::shared_state::Orientation::BottomUp | crate::shared_state::Orientation::TopDown => label.size().y,
+            crate::shared_state::Orientation::LeftRight | crate::shared_state::Orientation::RightLeft => label.size().x,
+        };
+        extent + 3.0 + 4.0
+    };
+
     // Render Overlay UI...
     if let Some(index) = hovered_bar_index {
         draw_inspector_overlay(
@@ -131,7 +150,8 @@ pub fn draw_main_visualizer(
             perf,
             index,
             bar_slot_width,
-            config.noise_floor_db);
+            config.noise_floor_db,
+            grid_reserve);
     }
 
     if config.show_stats {
@@ -552,6 +572,7 @@ pub fn draw_inspector_overlay(
     hovered_index: usize,
     bar_slot_width: f32,
     _noise_floor: f32,
+    grid_reserve: f32,
 ) {
     let num_bars = data.bars.len();
     if hovered_index >= num_bars { return; }
@@ -635,6 +656,24 @@ pub fn draw_inspector_overlay(
     let min_y = rect.top() + 5.0;
     let max_y = (rect.bottom() - tooltip_size.y - 5.0).max(min_y);
     tooltip_pos.y = tooltip_pos.y.clamp(min_y, max_y);
+
+    // Keep the tooltip clear of the frequency grid labels on the far edge
+    if grid_reserve > 0.0 {
+        match profile.orientation {
+            crate::shared_state::Orientation::BottomUp => {
+                tooltip_pos.y = tooltip_pos.y.max(rect.top() + grid_reserve);
+            }
+            crate::shared_state::Orientation::TopDown => {
+                tooltip_pos.y = tooltip_pos.y.min(rect.bottom() - grid_reserve - tooltip_size.y);
+            }
+            crate::shared_state::Orientation::LeftRight => {
+                tooltip_pos.x = tooltip_pos.x.min(rect.right() - grid_reserve - tooltip_size.x);
+            }
+            crate::shared_state::Orientation::RightLeft => {
+                tooltip_pos.x = tooltip_pos.x.max(rect.left() + grid_reserve);
+            }
+        }
+    }
     
 
     let tooltip_rect = Rect::from_min_size(tooltip_pos, tooltip_size);
@@ -1112,7 +1151,7 @@ fn draw_frequency_grid(
     let line_color = base.gamma_multiply(0.25 * factor);
     let label_color = base.gamma_multiply(0.6 * factor);
     let stroke = Stroke::new(1.0, line_color);
-    let font = egui::FontId::proportional(10.0);
+    let font = egui::FontId::proportional(GRID_LABEL_FONT_SIZE);
     let tick_len = 10.0_f32.min(max_v);
 
     let mut last_label: Option<Rect> = None;
