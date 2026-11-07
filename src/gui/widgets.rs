@@ -644,6 +644,36 @@ pub fn settings_tab_visual(
                         }
                     });
                     ui.end_row();
+
+                    ui.label("Frequency Grid");
+                    let grid_vis_text = match state.config.freq_grid_visibility {
+                        crate::shared_state::FreqGridVisibility::Off => "Off",
+                        crate::shared_state::FreqGridVisibility::Always => "Always",
+                        crate::shared_state::FreqGridVisibility::OnHover => "On hover",
+                    };
+                    egui::ComboBox::from_id_salt("freq_grid_vis_combo")
+                        .selected_text(grid_vis_text)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut state.config.freq_grid_visibility, crate::shared_state::FreqGridVisibility::Off, "Off");
+                            ui.selectable_value(&mut state.config.freq_grid_visibility, crate::shared_state::FreqGridVisibility::Always, "Always");
+                            ui.selectable_value(&mut state.config.freq_grid_visibility, crate::shared_state::FreqGridVisibility::OnHover, "On hover");
+                        });
+                    ui.end_row();
+
+                    if state.config.freq_grid_visibility != crate::shared_state::FreqGridVisibility::Off {
+                        ui.label("Grid Style");
+                        let grid_style_text = match state.config.freq_grid_style {
+                            crate::shared_state::FreqGridStyle::Full => "Full lines",
+                            crate::shared_state::FreqGridStyle::Minimal => "Minimal",
+                        };
+                        egui::ComboBox::from_id_salt("freq_grid_style_combo")
+                            .selected_text(grid_style_text)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut state.config.freq_grid_style, crate::shared_state::FreqGridStyle::Full, "Full lines");
+                                ui.selectable_value(&mut state.config.freq_grid_style, crate::shared_state::FreqGridStyle::Minimal, "Minimal");
+                            });
+                        ui.end_row();
+                    }
                 }
 
                 ui.label("Font Style");

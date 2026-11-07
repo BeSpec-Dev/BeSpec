@@ -68,6 +68,11 @@ pub fn draw_main_visualizer(
         })
     } else { None };
 
+    // Frequency grid goes first so it sits behind the bars
+    if profile.visual_mode != VisualMode::Oscilloscope {
+        draw_frequency_grid(painter, rect, config, profile, colors, data, perf, mouse_pos, max_u, bar_slot_width, bar_width);
+    }
+
     // 3. Dispatch to the specific rendering algorithm...
     match profile.visual_mode {
         VisualMode::SolidBars => {
@@ -1061,5 +1066,99 @@ fn map_uv_to_xy(
             // Rotated 90 CCW: Low freq (u=0) at Bottom, growing Up (-Y)
             egui::pos2(rect.right() - v, rect.bottom() - u)
         }
+    }
+}
+
+/// Draws faint vertical frequency markers (50 Hz .. 10 kHz) behind the visualizer.
+/// Positions come from `FFTProcessor::frequency_to_bar_position`, so they follow the bar mapping.
+fn draw_frequency_grid(
+    painter: &Painter,
+    rect: Rect,
+    config: &crate::shared_state::AppConfig,
+    profile: &VisualProfile,
+    colors: &crate::shared_state::ColorProfile,
+    data: &VisualizationData,
+    perf: &PerformanceStats,
+    mouse_pos: Option<egui::Pos2>,
+    max_u: f32,
+    bar_slot_width: f32,
+    bar_width: f32,
+) {
+    const GRID: [(f32, &str); 8] = [
+        (50.0, "50"), (100.0, "100"), (200.0, "200"), (500.0, "500"),
+        (1000.0, "1k"), (2000.0, "2k"), (5000.0, "5k"), (10000.0, "10k"),
+    ];
+
+    // Visibility / hover fade
+    let factor = match config.freq_grid_visibility {
+        crate::shared_state::FreqGridVisibility::Off => return,
+        crate::shared_state::FreqGridVisibility::Always => 1.0,
+        crate::shared_state::FreqGridVisibility::OnHover => {
+            let hovered = mouse_pos.map_or(false, |p| rect.contains(p));
+            painter.ctx().animate_bool_with_time(egui::Id::new("bespec_freq_grid_hover"), hovered, 0.2)
+        }
+    };
+    if factor <= 0.0 { return; }
+
+    let total_bars = data.bars.len();
+    if total_bars == 0 { return; }
+
+    let max_v = match profile.orientation {
+        crate::shared_state::Orientation::BottomUp | crate::shared_state::Orientation::TopDown => rect.height(),
+        crate::shared_state::Orientation::LeftRight | crate::shared_state::Orientation::RightLeft => rect.width(),
+    };
+
+    let base = to_egui_color(colors.inspector_fg);
+    let line_color = base.gamma_multiply(0.25 * factor);
+    let label_color = base.gamma_multiply(0.6 * factor);
+    let stroke = Stroke::new(1.0, line_color);
+    let font = egui::FontId::proportional(10.0);
+    let tick_len = 10.0_f32.min(max_v);
+
+    let mut last_label: Option<Rect> = None;
+
+    for (freq, text) in GRID {
+        let Some(pos) = FFTProcessor::frequency_to_bar_position(
+            freq, total_bars, perf.fft_info.sample_rate, perf.fft_info.fft_size,
+        ) else { continue };
+
+        // Bars are centred in their slot; the line spectrum plots point i at i / len
+        let u = match profile.visual_mode {
+            VisualMode::LineSpectrum => pos / total_bars as f32 * max_u,
+            _ => pos * bar_slot_width + bar_width / 2.0,
+        };
+        if u < 0.0 || u > max_u { continue; }
+
+        let v_start = match config.freq_grid_style {
+            crate::shared_state::FreqGridStyle::Full => 0.0,
+            crate::shared_state::FreqGridStyle::Minimal => max_v - tick_len,
+        };
+        painter.line_segment([
+            map_uv_to_xy(rect, u, v_start, profile.orientation),
+            map_uv_to_xy(rect, u, max_v, profile.orientation),
+        ], stroke);
+
+        // Label sits beside the line at the far end from the baseline
+        let galley = painter.layout_no_wrap(text.to_string(), font.clone(), label_color);
+        let size = galley.size();
+        let a = map_uv_to_xy(rect, u, max_v - 3.0, profile.orientation);
+        let top_left = match profile.orientation {
+            crate::shared_state::Orientation::BottomUp => egui::pos2(a.x + 2.0, a.y),
+            crate::shared_state::Orientation::TopDown => egui::pos2(a.x + 2.0, a.y - size.y),
+            crate::shared_state::Orientation::LeftRight => egui::pos2(a.x - size.x, a.y + 1.0),
+            crate::shared_state::Orientation::RightLeft => egui::pos2(a.x, a.y - size.y - 1.0),
+        };
+        let mut label_rect = Rect::from_min_size(top_left, size);
+        // Clamp inside the visualizer rect
+        let mut shift = egui::Vec2::ZERO;
+        if label_rect.right() > rect.right() { shift.x = rect.right() - label_rect.right(); }
+        if label_rect.left() + shift.x < rect.left() { shift.x = rect.left() - label_rect.left(); }
+        if label_rect.bottom() > rect.bottom() { shift.y = rect.bottom() - label_rect.bottom(); }
+        if label_rect.top() + shift.y < rect.top() { shift.y = rect.top() - label_rect.top(); }
+        label_rect = label_rect.translate(shift);
+
+        if last_label.map_or(false, |prev| prev.expand(2.0).intersects(label_rect)) { continue; }
+        painter.galley(label_rect.min, galley, label_color);
+        last_label = Some(label_rect);
     }
 }

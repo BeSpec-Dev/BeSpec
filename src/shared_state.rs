@@ -72,6 +72,25 @@ pub enum MediaDisplayMode {
     Off,
 }
 
+/// When the frequency grid overlay is shown.
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize, Debug, Default)]
+pub enum FreqGridVisibility {
+    #[default]
+    Off,
+    Always,
+    OnHover,
+}
+
+/// How the frequency grid overlay is drawn.
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize, Debug, Default)]
+pub enum FreqGridStyle {
+    /// Faint full-height vertical lines.
+    #[default]
+    Full,
+    /// Short ticks at the far end of the bars, next to the labels.
+    Minimal,
+}
+
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize, Debug)]
 pub enum AggregationMode {
     /// Uses the highest peak in the frequency range
@@ -412,6 +431,13 @@ pub struct AppConfig {
     pub media_display_mode: MediaDisplayMode,
     pub media_fade_duration_sec: f32,
 
+    // === Frequency Grid ===
+    // serde(default) so configs saved before these existed still load
+    #[serde(default)]
+    pub freq_grid_visibility: FreqGridVisibility,
+    #[serde(default)]
+    pub freq_grid_style: FreqGridStyle,
+
     // === BeOS Settings === 
     /// Horizontal offset for the sliding BeOS tab
     pub beos_tab_offset: f32,
@@ -437,6 +463,8 @@ impl Default for AppConfig {
             noise_floor_db: -60.0,
             media_display_mode: MediaDisplayMode::FadeOnUpdate,
             media_fade_duration_sec: 5.0,
+            freq_grid_visibility: FreqGridVisibility::default(),
+            freq_grid_style: FreqGridStyle::default(),
             beos_tab_offset: 20.0,
             beos_window_collapsed: false,
         }
@@ -702,6 +730,17 @@ pub fn is_wayland() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_config_without_freq_grid_keys_loads() {
+        let mut v = serde_json::to_value(AppConfig::default()).unwrap();
+        let obj = v.as_object_mut().unwrap();
+        assert!(obj.remove("freq_grid_visibility").is_some());
+        assert!(obj.remove("freq_grid_style").is_some());
+        let cfg: AppConfig = serde_json::from_value(v).expect("old config must still load");
+        assert_eq!(cfg.freq_grid_visibility, FreqGridVisibility::Off);
+        assert_eq!(cfg.freq_grid_style, FreqGridStyle::Full);
+    }
 
     // --- 1. Serialization Tests ---
     // Critical: Ensures your structs don't crash serde when saving/loading

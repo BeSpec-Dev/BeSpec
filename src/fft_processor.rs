@@ -187,7 +187,48 @@ impl FFTProcessor {
         let min_log_freq = MAPPING_KNEE_FREQ.max(freq_res); // Start where lineaer left off
 
         (min_log_freq * (MAPPING_MAX_FREQ / min_log_freq).powf(t)) as f32
-    }    
+    }
+
+    /// Exact inverse of `calculate_bar_frequency`: returns the fractional bar index
+    /// (bar 0 centre = 0.0) at which `freq` falls, or None if it is not drawable.
+    /// Uses the same constants and linear-bar rounding so it tracks the forward mapping.
+    pub fn frequency_to_bar_position(
+        freq: f32,
+        total_bars: usize,
+        sample_rate: u32,
+        fft_size: usize,
+    ) -> Option<f32> {
+        if total_bars == 0 || fft_size == 0 || sample_rate == 0 || !freq.is_finite() || freq <= 0.0 {
+            return None;
+        }
+        let f = freq as f64;
+        let freq_res = sample_rate as f64 / fft_size as f64;
+        let linear_bar_count = (total_bars as f64 * MAPPING_LINEAR_PROPORTION).round() as usize;
+        let log_bar_count = total_bars - linear_bar_count;
+
+        let pos = if linear_bar_count > 0 && f <= MAPPING_KNEE_FREQ {
+            // Linear region: f = (i + 1) / L * knee
+            f / MAPPING_KNEE_FREQ * linear_bar_count as f64 - 1.0
+        } else {
+            // Log region: f = min_log * (max / min_log)^t, t = (i - L + 1) / log_count
+            let min_log_freq = MAPPING_KNEE_FREQ.max(freq_res);
+            if log_bar_count == 0 || min_log_freq >= MAPPING_MAX_FREQ {
+                return None;
+            }
+            let t = (f / min_log_freq).ln() / (MAPPING_MAX_FREQ / min_log_freq).ln();
+            if linear_bar_count > 0 && t < 0.0 {
+                return None; // gap between the knee and the first log bar
+            }
+            linear_bar_count as f64 + t * log_bar_count as f64 - 1.0
+        };
+
+        // Small tolerance so the last bar centre survives float rounding
+        let last = (total_bars - 1) as f64;
+        if !pos.is_finite() || pos < -1e-4 || pos > last + 1e-4 {
+            return None;
+        }
+        Some(pos.clamp(0.0, last) as f32)
+    }
     
 
     // ============ Private Implementation ============
@@ -454,6 +495,35 @@ mod tests {
     use crate::AudioPacket;
 
     use super::*;
+
+    #[test]
+    fn test_frequency_to_bar_position_round_trip() {
+        let fft_size = crate::fft_config::FIXED_FFT_SIZE;
+        for &bars in &[10usize, 64, 150, 512] {
+            for &sr in &[44100u32, 48000, 96000] {
+                for i in 0..bars {
+                    let f = FFTProcessor::calculate_bar_frequency(i, bars, sr, fft_size);
+                    let pos = FFTProcessor::frequency_to_bar_position(f, bars, sr, fft_size)
+                        .unwrap_or_else(|| panic!("None for bar {i} bars={bars} sr={sr}"));
+                    assert!((pos - i as f32).abs() < 1e-3, "bar {i} bars={bars} sr={sr} pos={pos}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_frequency_to_bar_position_monotonic_and_range() {
+        let fft_size = crate::fft_config::FIXED_FFT_SIZE;
+        let grid = [50.0f32, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0];
+        let mut prev = -1.0f32;
+        for f in grid {
+            let p = FFTProcessor::frequency_to_bar_position(f, 150, 48000, fft_size).expect("grid freq drawable");
+            assert!(p > prev, "{f} Hz not increasing");
+            prev = p;
+        }
+        assert!(FFTProcessor::frequency_to_bar_position(25000.0, 150, 48000, fft_size).is_none());
+        assert!(FFTProcessor::frequency_to_bar_position(100.0, 0, 48000, fft_size).is_none());
+    }
 
     #[test]
     fn test_hann_window() {
