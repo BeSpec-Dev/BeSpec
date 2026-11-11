@@ -582,16 +582,9 @@ pub fn draw_inspector_overlay(
     let sr = perf.fft_info.sample_rate;
     let fft_size = perf.fft_info.fft_size;
     
-    // Get precise frequency bounds from the engine
-    let max_freq = FFTProcessor::calculate_bar_frequency(hovered_index, num_bars, sr, fft_size);
-    let min_freq = if hovered_index == 0 {
-        0.0
-    } else {
-        FFTProcessor::calculate_bar_frequency(hovered_index - 1, num_bars, sr, fft_size)
-    };
-    
-    // Calculate Center (Average) Frequency for display
-    let center_freq = (min_freq + max_freq) / 2.0;
+    // Band the engine actually uses for this bar (centre = bar frequency)
+    let (min_freq, center_freq, max_freq) =
+        FFTProcessor::bar_frequency_range(hovered_index, num_bars, sr, fft_size);
 
     // === 2. Build Rich Text Layout ===
     // We use a LayoutJob to mix font sizes and colors in one text block

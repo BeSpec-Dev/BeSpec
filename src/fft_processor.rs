@@ -164,19 +164,64 @@ impl FFTProcessor {
 
     /// Public Helper: Calculate frequency for a specific bar index
     /// Centralized logic to ensure GUI and Audio math always match
+    #[allow(dead_code)] // kept as the public centre-frequency API; the GUI now uses bar_frequency_range
     pub fn calculate_bar_frequency(
         bar_index: usize,
         total_bars: usize,
         sample_rate: u32,
         fft_size: usize,
     ) -> f32 {
+        Self::bar_center_freq_f64(bar_index, total_bars, sample_rate, fft_size) as f32
+    }
+
+    /// Public Helper: (start, center, end) Hz of the band the engine assigns to a bar.
+    /// The centre is `calculate_bar_frequency`; start and end are the midpoints to the
+    /// neighbouring centres (0 Hz below bar 0, `MAPPING_MAX_FREQ` above the last bar).
+    /// `compute_bar_mapping` uses the same helper, so the two cannot drift.
+    pub fn bar_frequency_range(
+        bar_index: usize,
+        total_bars: usize,
+        sample_rate: u32,
+        fft_size: usize,
+    ) -> (f32, f32, f32) {
+        let (start, center, end) =
+            Self::bar_band_f64(bar_index, total_bars, sample_rate, fft_size);
+        (start as f32, center as f32, end as f32)
+    }
+
+    fn bar_band_f64(
+        bar_index: usize,
+        total_bars: usize,
+        sample_rate: u32,
+        fft_size: usize,
+    ) -> (f64, f64, f64) {
+        let current = Self::bar_center_freq_f64(bar_index, total_bars, sample_rate, fft_size);
+        let prev = if bar_index == 0 {
+            0.0
+        } else {
+            Self::bar_center_freq_f64(bar_index - 1, total_bars, sample_rate, fft_size)
+        };
+        let next = if bar_index + 1 >= total_bars {
+            MAPPING_MAX_FREQ
+        } else {
+            Self::bar_center_freq_f64(bar_index + 1, total_bars, sample_rate, fft_size)
+        };
+        ((prev + current) / 2.0, current, (current + next) / 2.0)
+    }
+
+    fn bar_center_freq_f64(
+        bar_index: usize,
+        total_bars: usize,
+        sample_rate: u32,
+        fft_size: usize,
+    ) -> f64 {
         let freq_res = sample_rate as f64 / fft_size as f64;
         let linear_bar_count = (total_bars as f64 * MAPPING_LINEAR_PROPORTION).round() as usize;
 
         // 1. Check linear region
         if bar_index < linear_bar_count {
             let t = (bar_index + 1) as f64 / linear_bar_count as f64;
-            return (t * MAPPING_KNEE_FREQ) as f32;
+            return t * MAPPING_KNEE_FREQ;
         }
 
         // 2. Check log region
@@ -186,7 +231,7 @@ impl FFTProcessor {
         let t = (log_index + 1) as f64 / log_bar_count as f64;
         let min_log_freq = MAPPING_KNEE_FREQ.max(freq_res); // Start where lineaer left off
 
-        (min_log_freq * (MAPPING_MAX_FREQ / min_log_freq).powf(t)) as f32
+        min_log_freq * (MAPPING_MAX_FREQ / min_log_freq).powf(t)
     }
 
     /// Exact inverse of `calculate_bar_frequency`: returns the fractional bar index
@@ -325,36 +370,11 @@ impl FFTProcessor {
         let frequency_resolution = sample_rate as f64 / fft_size as f64;
         let max_bin_idx = fft_size / 2;
                 
-        let linear_bar_count = (num_bars as f64 * MAPPING_LINEAR_PROPORTION).round() as usize;
-        let log_bar_count = num_bars - linear_bar_count;
-        let min_log_bars = MAPPING_KNEE_FREQ.max(frequency_resolution);
-
-        // 1. Build an array of target frequencies
-        let mut exact_freqs = Vec::with_capacity(num_bars);
-
-        // === LINEAR SECTION (0 Hz to Knee) ===
-        for i in 0..linear_bar_count {
-            let freq_target = (i + 1) as f64 / linear_bar_count as f64 * MAPPING_KNEE_FREQ;
-            exact_freqs.push(freq_target);
-        }
-    
-        // === LOGARITHMIC SECTION ===
-        for i in 0..log_bar_count {
-            let t = (i + 1) as f64 / log_bar_count as f64;
-            // True Logarithmic Interpolation
-            let freq_target = min_log_bars * (MAPPING_MAX_FREQ / min_log_bars).powf(t);
-            exact_freqs.push(freq_target);
-        }
-
-        // 2. Build BarToBinMap ranges with midpoints between exact frequencies
+        // Build BarToBinMap ranges from the shared band rule (midpoints between centres)
         for i in 0..num_bars {
-            let current_freq = exact_freqs[i];
-            let prev_freq = if i == 0 { 0.0 }  else { exact_freqs[i - 1] };
-            let next_freq = if i == num_bars - 1 { MAPPING_MAX_FREQ } else {exact_freqs[i + 1]};
+            let (freq_start, current_freq, freq_end) =
+                Self::bar_band_f64(i, num_bars, sample_rate, fft_size);
 
-            let freq_start = (prev_freq + current_freq) / 2.0;
-            let freq_end = (current_freq + next_freq) / 2.0;
-            
             let exact_bin = (current_freq / frequency_resolution) as f32;
             let start_bin = (freq_start / frequency_resolution).floor() as usize;
             let mut end_bin = (freq_end / frequency_resolution).floor() as usize;
@@ -523,6 +543,50 @@ mod tests {
         }
         assert!(FFTProcessor::frequency_to_bar_position(25000.0, 150, 48000, fft_size).is_none());
         assert!(FFTProcessor::frequency_to_bar_position(100.0, 0, 48000, fft_size).is_none());
+    }
+
+    #[test]
+    fn test_bar_frequency_range_matches_bar_mapping() {
+        let fft_size = crate::fft_config::FIXED_FFT_SIZE;
+        for &bars in &[10usize, 64, 150, 512] {
+            for &sr in &[44100u32, 48000, 96000] {
+                let res = sr as f64 / fft_size as f64;
+                let max_bin = fft_size / 2;
+                let mapping = FFTProcessor::compute_bar_mapping(bars, sr, fft_size);
+                for i in 0..bars {
+                    let (s, c, e) = FFTProcessor::bar_frequency_range(i, bars, sr, fft_size);
+                    assert_eq!(c, FFTProcessor::calculate_bar_frequency(i, bars, sr, fft_size));
+                    assert!(s <= c && c <= e, "bar {i} bars={bars} sr={sr}: {s} {c} {e}");
+                    let start_bin = ((s as f64 / res).floor() as usize).min(max_bin);
+                    let end_bin = ((e as f64 / res).floor() as usize).min(max_bin).max(start_bin);
+                    // f32 rounding may shift a boundary that sits exactly on a bin edge
+                    assert!(mapping[i].start_bin.abs_diff(start_bin) <= 1, "start bar {i} bars={bars} sr={sr}");
+                    assert!(mapping[i].end_bin.abs_diff(end_bin) <= 1, "end bar {i} bars={bars} sr={sr}");
+                    if i + 1 < bars {
+                        let (s2, _, _) = FFTProcessor::bar_frequency_range(i + 1, bars, sr, fft_size);
+                        assert_eq!(e, s2, "bars {i}/{} share a boundary", i + 1);
+                    }
+                }
+                let (s0, c0, _) = FFTProcessor::bar_frequency_range(0, bars, sr, fft_size);
+                assert_eq!(s0, c0 / 2.0);
+                assert_eq!(
+                    FFTProcessor::bar_frequency_range(bars - 1, bars, sr, fft_size).1,
+                    MAPPING_MAX_FREQ as f32
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_grid_frequency_falls_inside_its_bar_band() {
+        let fft_size = crate::fft_config::FIXED_FFT_SIZE;
+        for f in [50.0f32, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0] {
+            let p = FFTProcessor::frequency_to_bar_position(f, 150, 48000, fft_size).expect("drawable");
+            let i = p.round() as usize;
+            let (s, _, e) = FFTProcessor::bar_frequency_range(i, 150, 48000, fft_size);
+            let tol = f * 0.005;
+            assert!(s - tol <= f && f <= e + tol, "{f} Hz outside bar {i} band [{s}, {e}]");
+        }
     }
 
     #[test]
