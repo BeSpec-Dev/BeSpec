@@ -64,8 +64,7 @@ pub fn draw_main_visualizer(
                     }
                 };
 
-                let index = (u_pos / bar_slot_width).floor() as usize;
-                if index < display_bars { Some(index)} else { None }
+                hovered_index_at(profile.visual_mode, u_pos, data.bars.len(), display_bars, max_u, bar_slot_width)
             }else { None }
         })
     } else { None };
@@ -150,6 +149,7 @@ pub fn draw_main_visualizer(
             perf,
             index,
             bar_slot_width,
+            bar_width,
             config.noise_floor_db,
             grid_reserve);
     }
@@ -562,6 +562,46 @@ pub fn draw_oscilloscope(
 }
 
 
+/// Position along the baseline (u) of bar `pos` (may be fractional). Bars are centred in
+/// their slot; the line spectrum plots vertex i at i / len of the width. Shared by hover
+/// picking, the inspector dot and the frequency grid so they always agree.
+fn bar_center_u(
+    mode: VisualMode,
+    pos: f32,
+    total_bars: usize,
+    max_u: f32,
+    bar_slot_width: f32,
+    bar_width: f32,
+) -> f32 {
+    match mode {
+        VisualMode::LineSpectrum => pos / total_bars.max(1) as f32 * max_u,
+        _ => pos * bar_slot_width + bar_width / 2.0,
+    }
+}
+
+/// Mouse counterpart of `bar_center_u`: the bar slot under `u_pos` for bar modes, the
+/// nearest vertex for the line spectrum.
+fn hovered_index_at(
+    mode: VisualMode,
+    u_pos: f32,
+    total_bars: usize,
+    display_bars: usize,
+    max_u: f32,
+    bar_slot_width: f32,
+) -> Option<usize> {
+    if u_pos < 0.0 || total_bars == 0 { return None; }
+    match mode {
+        VisualMode::LineSpectrum => {
+            let spacing = max_u / total_bars as f32;
+            Some(((u_pos / spacing).round() as usize).min(total_bars - 1))
+        }
+        _ => {
+            let index = (u_pos / bar_slot_width).floor() as usize;
+            if index < display_bars { Some(index) } else { None }
+        }
+    }
+}
+
 pub fn draw_inspector_overlay( 
     painter: &egui::Painter, 
     rect: egui::Rect, 
@@ -571,6 +611,7 @@ pub fn draw_inspector_overlay(
     perf: &crate::shared_state::PerformanceStats,
     hovered_index: usize,
     bar_slot_width: f32,
+    bar_width: f32,
     _noise_floor: f32,
     grid_reserve: f32,
 ) {
@@ -630,8 +671,12 @@ pub fn draw_inspector_overlay(
         crate::shared_state::Orientation::LeftRight | crate::shared_state::Orientation::RightLeft => rect.width(),
     };
 
-    // Calculate logical center of the hovered bar
-    let u_center= (hovered_index as f32 * bar_slot_width) + (bar_slot_width / 2.0);
+    // Logical position of the hovered bar (same rule as the grid and the drawn bars)
+    let max_u = match profile.orientation {
+        crate::shared_state::Orientation::BottomUp | crate::shared_state::Orientation::TopDown => rect.width(),
+        crate::shared_state::Orientation::LeftRight | crate::shared_state::Orientation::RightLeft => rect.height(),
+    };
+    let u_center = bar_center_u(profile.visual_mode, hovered_index as f32, num_bars, max_u, bar_slot_width, bar_width);
 
     // Calculate the physical position for the target dot (10 logical pixels away)
     let dot_pos = map_uv_to_xy(rect, u_center, 10.0, profile.orientation);
@@ -1154,11 +1199,7 @@ fn draw_frequency_grid(
             freq, total_bars, perf.fft_info.sample_rate, perf.fft_info.fft_size,
         ) else { continue };
 
-        // Bars are centred in their slot; the line spectrum plots point i at i / len
-        let u = match profile.visual_mode {
-            VisualMode::LineSpectrum => pos / total_bars as f32 * max_u,
-            _ => pos * bar_slot_width + bar_width / 2.0,
-        };
+        let u = bar_center_u(profile.visual_mode, pos, total_bars, max_u, bar_slot_width, bar_width);
         if u < 0.0 || u > max_u { continue; }
 
         let v_start = match config.freq_grid_style {
