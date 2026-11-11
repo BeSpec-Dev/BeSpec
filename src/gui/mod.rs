@@ -18,6 +18,10 @@ use crate::shared_state::{Color32 as StateColor32, SharedState};
 
 use crate::gui::widgets::{SaveTarget, SettingsTab};
 
+/// Settings window height limits in points (width is fixed at 450)
+const SETTINGS_MIN_HEIGHT: f32 = 500.0;
+const SETTINGS_MAX_HEIGHT: f32 = 700.0;
+
 pub struct LodDebouncer {
     pub target_limit: usize,
     pub last_change: std::time::Instant,
@@ -580,23 +584,44 @@ impl eframe::App for SpectrumApp {
                 egui::ViewportId::from_hash_of("settings_viewport"),
                 egui::ViewportBuilder::default()
                     .with_title("BeSpec Settings")
-                    .with_inner_size([450.0, 500.0])
+                    .with_inner_size([450.0, SETTINGS_MIN_HEIGHT])
                     .with_resizable(false)
                     .with_maximize_button(false),
                 |ctx, _class| {
+                    egui::TopBottomPanel::bottom("settings_footer").show(ctx, |ui| {
+                        crate::gui::widgets::show_settings_footer(ui);
+                    });
                     egui::CentralPanel::default().show(ctx, |ui| {
                         // Handle closing the viewport  via the OS "X" button
                         if ctx.input(|i| i.viewport().close_requested()) {
                             self.settings_open = false;
                         }
 
-                        crate::gui::widgets::show_settings_window(
+                        let overflow = crate::gui::widgets::show_settings_window(
                             ui,
                             &mut state,
                             &mut self.active_tab,
                             &mut self.save_target,
                             &mut self.new_preset_name
                         );
+
+                        // Grow or shrink the window so the current tab fits without scrolling
+                        let (inner, monitor) = ctx.input(|i| {
+                            let v = i.viewport();
+                            (v.inner_rect, v.monitor_size)
+                        });
+                        if let Some(inner) = inner {
+                            let max_h = monitor
+                                .map_or(SETTINGS_MAX_HEIGHT, |m| (m.y - 80.0).min(SETTINGS_MAX_HEIGHT))
+                                .max(SETTINGS_MIN_HEIGHT);
+                            let target = (inner.height() + overflow).clamp(SETTINGS_MIN_HEIGHT, max_h);
+                            if (target - inner.height()).abs() > 1.0 {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                                    egui::vec2(450.0, target),
+                                ));
+                                ctx.request_repaint();
+                            }
+                        }
                     });
                 }
             );

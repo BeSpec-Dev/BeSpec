@@ -441,7 +441,7 @@ pub fn show_settings_window(
     active_tab: &mut SettingsTab,
     save_target: &mut SaveTarget,
     new_preset_name: &mut String
-) {
+) -> f32 {
     // Tabs
     ui.add_space(5.0);
     ui.horizontal(|ui| {
@@ -455,7 +455,9 @@ pub fn show_settings_window(
     });
     ui.separator();
 
-    egui::ScrollArea::vertical().show(ui, |ui| {
+    // auto_shrink off so the area fills the window; content height minus visible height
+    // is then how much the window is short (positive) or has spare (negative).
+    let scroll = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         match active_tab {
             SettingsTab::Visual => settings_tab_visual(ui, state, save_target, new_preset_name),
             SettingsTab::Audio => settings_tab_audio(ui, state),
@@ -464,15 +466,20 @@ pub fn show_settings_window(
             SettingsTab::Performance => settings_tab_performance(ui, state),
         }
     });
+    let overflow = scroll.content_size.y - scroll.inner_rect.height();
 
-    ui.separator();
-        ui.vertical_centered(|ui| {
-            ui.add_space(5.0);
-            ui.label(
-                egui::RichText::new(format!("BeSpec v{}", env!("CARGO_PKG_VERSION")))
-                .small()
-            );
-        });
+    overflow
+}
+
+/// Version footer, drawn in a bottom panel so it is never pushed out of the window
+pub fn show_settings_footer(ui: &mut egui::Ui) {
+    ui.vertical_centered(|ui| {
+        ui.add_space(5.0);
+        ui.label(
+            egui::RichText::new(format!("BeSpec v{}", env!("CARGO_PKG_VERSION")))
+            .small()
+        );
+    });
 }
 
 pub fn settings_tab_visual(
@@ -644,6 +651,36 @@ pub fn settings_tab_visual(
                         }
                     });
                     ui.end_row();
+
+                    ui.label("Frequency Grid");
+                    let grid_vis_text = match state.config.freq_grid_visibility {
+                        crate::shared_state::FreqGridVisibility::Off => "Off",
+                        crate::shared_state::FreqGridVisibility::Always => "Always",
+                        crate::shared_state::FreqGridVisibility::OnHover => "On hover",
+                    };
+                    egui::ComboBox::from_id_salt("freq_grid_vis_combo")
+                        .selected_text(grid_vis_text)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut state.config.freq_grid_visibility, crate::shared_state::FreqGridVisibility::Off, "Off");
+                            ui.selectable_value(&mut state.config.freq_grid_visibility, crate::shared_state::FreqGridVisibility::Always, "Always");
+                            ui.selectable_value(&mut state.config.freq_grid_visibility, crate::shared_state::FreqGridVisibility::OnHover, "On hover");
+                        });
+                    ui.end_row();
+
+                    if state.config.freq_grid_visibility != crate::shared_state::FreqGridVisibility::Off {
+                        ui.label("Grid Style");
+                        let grid_style_text = match state.config.freq_grid_style {
+                            crate::shared_state::FreqGridStyle::Full => "Full lines",
+                            crate::shared_state::FreqGridStyle::Minimal => "Minimal",
+                        };
+                        egui::ComboBox::from_id_salt("freq_grid_style_combo")
+                            .selected_text(grid_style_text)
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut state.config.freq_grid_style, crate::shared_state::FreqGridStyle::Full, "Full lines");
+                                ui.selectable_value(&mut state.config.freq_grid_style, crate::shared_state::FreqGridStyle::Minimal, "Minimal");
+                            });
+                        ui.end_row();
+                    }
                 }
 
                 ui.label("Font Style");
